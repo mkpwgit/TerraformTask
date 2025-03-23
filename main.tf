@@ -1,33 +1,64 @@
-terraform {
-  required_providers {
-    aws = {
-      source  = "hashicorp/aws"
-      version = "~> 4.16"
-    }
+# Create a VPC
+resource "aws_vpc" "my_main_vpc" {
+  cidr_block = "10.0.0.0/16"
+
+  tags = {
+    Name = "my_main_vpc"
   }
-
-  required_version = ">= 1.2.0"
 }
 
-provider "aws" {
-  region = "eu-central-1"
+# Create subnets
+resource "aws_subnet" "public_subnet1" {
+  vpc_id            = aws_vpc.my_main_vpc.id
+  cidr_block        = "10.0.1.0/24"
+  availability_zone = "eu-central-1a"
+
+  tags = {
+    Name = "public_subnet1"
+  }
 }
 
-variable "internet_cidr" {
-  description = "CIDR block for internet access"
-  type        = string
-  default     = "0.0.0.0/0"
+resource "aws_subnet" "private_subnet1" {
+  vpc_id            = aws_vpc.my_main_vpc.id
+  cidr_block        = "10.0.2.0/24"
+  availability_zone = "eu-central-1a"
+
+  tags = {
+    Name = "private_subnet1"
+  }
 }
 
-variable "local_network_cidr" {
-  description = "CIDR block for the local network"
-  type        = string
-  default     = "10.0.0.0/16"  # Adjust the default value to match your local network
+resource "aws_internet_gateway" "IGW" {
+  vpc_id = aws_vpc.my_main_vpc.id
+  tags = {
+    Name = "IGW"
+  }
+}
+
+# these resources will create a public route table and associate the public subnets with an internet gateway added 
+
+resource "aws_route_table" "public_RT" {
+  vpc_id = aws_vpc.my_main_vpc.id
+
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.IGW.id
+  }
+  tags = {
+    Name = "Public_RT"
+  }
+}
+
+resource "aws_route_table_association" "public_subnet_1a" {
+  subnet_id      = aws_subnet.public_subnet1.id
+  route_table_id = aws_route_table.public_RT.id
 }
 
 resource "aws_security_group" "ubuntu_sg" {
   name        = "ubuntu_sg"
   description = "Security group for Ubuntu instance with required access"
+  vpc_id      = aws_vpc.my_main_vpc.id
 }
 
 resource "aws_vpc_security_group_ingress_rule" "ubuntu_icmp" {
@@ -73,6 +104,7 @@ resource "aws_vpc_security_group_egress_rule" "ubuntu_all" {
 resource "aws_security_group" "amazon_linux_sg" {
   name        = "amazon_linux_sg"
   description = "Security group for Amazon Linux instance with required access"
+  vpc_id      = aws_vpc.my_main_vpc.id
 }
 
 resource "aws_vpc_security_group_ingress_rule" "amazon_linux_icmp" {
@@ -115,19 +147,40 @@ resource "aws_vpc_security_group_egress_rule" "amazon_linux_all" {
   cidr_ipv4         = var.local_network_cidr
 }
 
+data "aws_ami" "latest_ubuntu" {
+  most_recent = true
+  owners = ["099720109477"]
+
+  filter {
+    name = "name"
+    values = ["ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server*"]
+  }
+
+  filter {
+    name = "virtualization-type"
+    values = ["hvm"]
+  }
+
+  filter {
+    name = "architecture"
+    values = ["x86_64"]
+  }
+}
+
 resource "aws_instance" "ubuntu_instance" {
-  ami           = "ami-07eef52105e8a2059"
+  ami           = data.aws_ami.latest_ubuntu.id
   instance_type = "t2.micro"
 
   tags = {
     Name = "UbuntuC"
   }
 
+  associate_public_ip_address = true
+  subnet_id = aws_subnet.public_subnet1.id
   vpc_security_group_ids = [aws_security_group.ubuntu_sg.id]
 
   user_data = <<-EOF
               #!/bin/bash
-              sudo su
               apt update
               apt install -y nginx
               echo "Hello World" >> /var/www/html/index.html
@@ -154,13 +207,34 @@ resource "aws_instance" "ubuntu_instance" {
               EOF
 }
 
+data "aws_ami" "latest_amazon_linux" {
+  most_recent = true
+  owners = ["amazon"]
+
+  filter {
+    name = "name"
+    values = ["al2023-ami-2023.6.*"]
+  }
+
+  filter {
+    name = "virtualization-type"
+    values = ["hvm"]
+  }
+
+  filter {
+    name = "architecture"
+    values = ["x86_64"]
+  }
+}
+
 resource "aws_instance" "amazon_linux_instance" {
-  ami           = "ami-0b74f796d330ab49c"
+  ami           = data.aws_ami.latest_amazon_linux.id
   instance_type = "t2.micro"
 
   tags = {
     Name = "AmazonLinuxC"
   }
 
+  subnet_id = aws_subnet.private_subnet1.id
   vpc_security_group_ids = [aws_security_group.amazon_linux_sg.id]
 }
