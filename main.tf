@@ -1,6 +1,6 @@
 # Create a VPC
 resource "aws_vpc" "my_main_vpc" {
-  cidr_block = "10.0.0.0/16"
+  cidr_block = var.local_network_cidr
 
   tags = {
     Name = "my_main_vpc"
@@ -10,7 +10,7 @@ resource "aws_vpc" "my_main_vpc" {
 # Create subnets
 resource "aws_subnet" "public_subnet1" {
   vpc_id            = aws_vpc.my_main_vpc.id
-  cidr_block        = "10.0.1.0/24"
+  cidr_block        = var.subnet1_cidr
   availability_zone = "eu-central-1a"
 
   tags = {
@@ -20,7 +20,7 @@ resource "aws_subnet" "public_subnet1" {
 
 resource "aws_subnet" "private_subnet1" {
   vpc_id            = aws_vpc.my_main_vpc.id
-  cidr_block        = "10.0.2.0/24"
+  cidr_block        = var.subnet2_cidr
   availability_zone = "eu-central-1a"
 
   tags = {
@@ -28,6 +28,7 @@ resource "aws_subnet" "private_subnet1" {
   }
 }
 
+#internet gateway
 resource "aws_internet_gateway" "IGW" {
   vpc_id = aws_vpc.my_main_vpc.id
   tags = {
@@ -35,18 +36,25 @@ resource "aws_internet_gateway" "IGW" {
   }
 }
 
-# these resources will create a public route table and associate the public subnets with an internet gateway added 
-
 resource "aws_route_table" "public_RT" {
   vpc_id = aws_vpc.my_main_vpc.id
 
 
   route {
-    cidr_block = "0.0.0.0/0"
+    cidr_block = var.internet_cidr
     gateway_id = aws_internet_gateway.IGW.id
   }
   tags = {
     Name = "Public_RT"
+  }
+}
+
+resource "aws_route_table" "private_RT" {
+  vpc_id = aws_vpc.my_main_vpc.id
+
+
+  tags = {
+    Name = "Private_RT"
   }
 }
 
@@ -55,6 +63,12 @@ resource "aws_route_table_association" "public_subnet_1a" {
   route_table_id = aws_route_table.public_RT.id
 }
 
+resource "aws_route_table_association" "private_subnet_1a" {
+  subnet_id      = aws_subnet.private_subnet1.id
+  route_table_id = aws_route_table.private_RT.id
+}
+
+#security groups
 resource "aws_security_group" "ubuntu_sg" {
   name        = "ubuntu_sg"
   description = "Security group for Ubuntu instance with required access"
@@ -63,10 +77,26 @@ resource "aws_security_group" "ubuntu_sg" {
 
 resource "aws_vpc_security_group_ingress_rule" "ubuntu_icmp" {
   security_group_id = aws_security_group.ubuntu_sg.id
-  from_port         = 0
-  to_port           = 0
+  from_port         = -1
+  to_port           = -1
   ip_protocol       = "icmp"
   cidr_ipv4         = var.internet_cidr
+}
+
+resource "aws_vpc_security_group_egress_rule" "ubuntu_icmp_amazon" {
+  security_group_id = aws_security_group.ubuntu_sg.id
+  from_port         = -1
+  to_port           = -1
+  ip_protocol       = "icmp"
+  cidr_ipv4         = var.subnet2_cidr
+}
+
+resource "aws_vpc_security_group_egress_rule" "ubuntu_http_amazon" {
+  security_group_id = aws_security_group.ubuntu_sg.id
+  from_port         = 80
+  to_port           = 80
+  ip_protocol       = "tcp"
+  cidr_ipv4         = var.subnet2_cidr
 }
 
 resource "aws_vpc_security_group_ingress_rule" "ubuntu_ssh" {
@@ -95,8 +125,6 @@ resource "aws_vpc_security_group_ingress_rule" "ubuntu_https" {
 
 resource "aws_vpc_security_group_egress_rule" "ubuntu_all" {
   security_group_id = aws_security_group.ubuntu_sg.id
-  from_port         = 0
-  to_port           = 0
   ip_protocol       = "-1"
   cidr_ipv4         = var.internet_cidr
 }
@@ -109,10 +137,10 @@ resource "aws_security_group" "amazon_linux_sg" {
 
 resource "aws_vpc_security_group_ingress_rule" "amazon_linux_icmp" {
   security_group_id = aws_security_group.amazon_linux_sg.id
-  from_port         = 0
-  to_port           = 0
+  from_port         = -1
+  to_port           = -1
   ip_protocol       = "icmp"
-  cidr_ipv4         = var.local_network_cidr
+  cidr_ipv4         = var.subnet1_cidr
 }
 
 resource "aws_vpc_security_group_ingress_rule" "amazon_linux_ssh" {
@@ -120,7 +148,7 @@ resource "aws_vpc_security_group_ingress_rule" "amazon_linux_ssh" {
   from_port         = 22
   to_port           = 22
   ip_protocol       = "tcp"
-  cidr_ipv4         = var.local_network_cidr
+  cidr_ipv4         = var.subnet1_cidr
 }
 
 resource "aws_vpc_security_group_ingress_rule" "amazon_linux_http" {
@@ -128,7 +156,7 @@ resource "aws_vpc_security_group_ingress_rule" "amazon_linux_http" {
   from_port         = 80
   to_port           = 80
   ip_protocol       = "tcp"
-  cidr_ipv4         = var.local_network_cidr
+  cidr_ipv4         = var.subnet1_cidr
 }
 
 resource "aws_vpc_security_group_ingress_rule" "amazon_linux_https" {
@@ -136,15 +164,13 @@ resource "aws_vpc_security_group_ingress_rule" "amazon_linux_https" {
   from_port         = 443
   to_port           = 443
   ip_protocol       = "tcp"
-  cidr_ipv4         = var.local_network_cidr
+  cidr_ipv4         = var.subnet1_cidr
 }
 
 resource "aws_vpc_security_group_egress_rule" "amazon_linux_all" {
   security_group_id = aws_security_group.amazon_linux_sg.id
-  from_port         = 0
-  to_port           = 0
   ip_protocol       = "-1"
-  cidr_ipv4         = var.local_network_cidr
+  cidr_ipv4         = var.subnet2_cidr
 }
 
 data "aws_ami" "latest_ubuntu" {
@@ -199,7 +225,7 @@ resource "aws_instance" "ubuntu_instance" {
               echo \
                 "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
                 $(. /etc/os-release && echo "$${UBUNTU_CODENAME:-$$VERSION_CODENAME}") stable" | \
-                sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+                tee /etc/apt/sources.list.d/docker.list > /dev/null
               apt update
 
               apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
